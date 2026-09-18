@@ -212,6 +212,22 @@ def test_handle_rejects_invalid_input_without_queueing() -> None:
     assert submits == []
 
 
+def test_closed_handle_rejects_proposals_without_queueing() -> None:
+    submits: list[None] = []
+    queue = ProposalQueue(on_submit=lambda: submits.append(None))
+    handle = ProposalHandle("A", queue)
+
+    handle.close()
+
+    with pytest.raises(ProposalContextError):
+        handle.propose_task(_spec("B"))
+    with pytest.raises(ProposalContextError):
+        handle.propose_dependency("A", "B")
+
+    assert len(queue) == 0
+    assert submits == []
+
+
 def test_current_proposals_raises_when_nothing_is_bound() -> None:
     with pytest.raises(ProposalContextError):
         current_proposals()

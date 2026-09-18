@@ -276,6 +276,44 @@ def test_a_proposal_from_the_last_running_worker_is_still_applied() -> None:
     asyncio.run(scenario())
 
 
+def test_a_task_left_running_by_a_worker_cannot_propose_after_it_settles() -> None:
+    async def scenario() -> None:
+        graph = TaskGraph()
+        _add_tasks(graph, "A")
+        executor = _ScriptedExecutor()
+        release = asyncio.Event()
+        errors: list[ProposalContextError] = []
+        leftovers: list[asyncio.Task[None]] = []
+
+        async def late_proposal() -> None:
+            # copies the worker's context, so it sees the worker's handle
+            await release.wait()
+            try:
+                current_proposals().propose_task(_spec("X"))
+            except ProposalContextError as error:
+                errors.append(error)
+
+        async def worker_a() -> None:
+            leftovers.append(asyncio.create_task(late_proposal()))
+
+        executor.scripts["A"] = worker_a
+        scheduler = Scheduler(graph, executor)
+        summary = await scheduler.run()
+
+        release.set()
+        await leftovers[0]
+
+        assert len(errors) == 1
+        assert summary.proposals == ()
+
+        second = await scheduler.run()
+
+        assert second.proposals == ()
+        assert "X" not in graph.tasks
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("propose", "error"),
     [

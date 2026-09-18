@@ -105,6 +105,7 @@ Stage 4, structured mutation proposal queue:
 - `ProposalQueue` holds proposals only, in submission order, and calls the scheduler's wakeup on every submit
 - `ProposalHandle` holds a queue reference and a task id, never the graph or the state; `propose_task` and `propose_dependency` stamp `proposed_by` with that id, enqueue the proposal, and return it
 - `Scheduler.run` starts each worker through a private `_execute` coroutine that binds the worker's handle in a `ContextVar` inside its own `asyncio.Task`; `current_proposals()` returns that handle and raises `ProposalContextError` outside a scheduled worker, and `Executor.execute(spec)` keeps its signature
+- `_execute` closes the handle when its worker settles, so a task the worker left running cannot propose afterwards and nothing is queued after `run()` returns
 - `Scheduler.add_task` takes keyword-only `prerequisites`; it validates the id and every prerequisite before writing, then registers the task and all its edges in one synchronous step, so a rejection is all-or-nothing and the task never exists without its edges
 - `run()` drains the queue at the top of every iteration, before readiness promotion, and applies each proposal through `add_task` or `add_dependency`; a settled worker's proposals land before the readiness check that follows, and the run cannot end with proposals queued
 - A submit resolves the run loop's wakeup future, so proposals from running workers are applied without waiting for any worker to finish
@@ -112,7 +113,7 @@ Stage 4, structured mutation proposal queue:
 - Proposals from a worker that raises are still applied, and that worker's task is `FAILED` as usual
 - `RunSummary.proposals` is a tuple of `ProposalOutcome(proposal, applied, reason)` in application order; `reason` is `None` when applied and the error class name and message when rejected
 
-One hundred three tests pass: fifteen graph and schema, nineteen execution state, thirty-one scheduler, nineteen proposal queue and handle, and nineteen scheduler proposal drain. Scheduler and proposal tests use `asyncio.Event` for ordering and run through `asyncio.run` from sync test functions; there is no sleep-based sequencing and no async test plugin.
+One hundred five tests pass: fifteen graph and schema, nineteen execution state, thirty-one scheduler, twenty proposal queue and handle, and twenty scheduler proposal drain. Scheduler and proposal tests use `asyncio.Event` for ordering and run through `asyncio.run` from sync test functions; there is no sleep-based sequencing and no async test plugin.
 
 The Stage 1 inconsistencies are resolved. `models.py` holds the schema, `graph.py` no longer defines a task type, and the README matches the code.
 

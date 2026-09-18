@@ -41,7 +41,8 @@ class RunSummary:
     failed: tuple[str, ...]
     blocked: tuple[str, ...]
     states: Mapping[str, TaskState]
-    # one outcome per proposal applied during this run, in submission order
+    # one outcome per proposal drained during this run, applied or rejected,
+    # in submission order
     proposals: tuple[ProposalOutcome, ...] = ()
 
 
@@ -109,8 +110,14 @@ class Scheduler:
     async def _execute(self, spec: TaskSpec) -> None:
         # runs inside the worker's own asyncio task, so the binding lives in
         # that task's context copy and never reaches siblings or run
-        bind_proposals(ProposalHandle(spec.id, self._proposals))
-        await self._executor.execute(spec)
+        handle = ProposalHandle(spec.id, self._proposals)
+        bind_proposals(handle)
+        try:
+            await self._executor.execute(spec)
+        finally:
+            # a settled worker cannot propose, so a task it left running cannot
+            # queue work after run ends
+            handle.close()
 
     def _apply_proposals(self, outcomes: list[ProposalOutcome]) -> None:
         for proposal in self._proposals.drain():
