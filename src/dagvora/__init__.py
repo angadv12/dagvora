@@ -16,7 +16,7 @@ from .proposals import (
     ProposalHandle,
     current_proposals,
 )
-from .scheduler import Executor, RunSummary, Scheduler
+from .scheduler import Executor, ProposalOutcome, RunSummary, Scheduler
 from .state import LEGAL_TRANSITIONS, ExecutionState, TaskState
 
 __all__ = [
@@ -33,6 +33,7 @@ __all__ = [
     "MutationProposal",
     "ProposalContextError",
     "ProposalHandle",
+    "ProposalOutcome",
     "RunSummary",
     "Scheduler",
     "TaskGraph",
