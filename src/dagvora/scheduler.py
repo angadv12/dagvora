@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
+from .exceptions import DuplicateTaskError
 from .graph import TaskGraph
 from .models import TaskSpec
 from .state import ExecutionState, TaskState
@@ -33,6 +34,20 @@ class Scheduler:
         self._state = (
             state if state is not None else ExecutionState(graph.tasks.keys())
         )
+        # set only while run is parked waiting for work to finish
+        self._wakeup: asyncio.Future[None] | None = None
+
+    def add_task(self, spec: TaskSpec) -> None:
+        # check the graph first so a rejected id leaves both stores unchanged
+        if spec.id in self._graph.tasks:
+            raise DuplicateTaskError(f"task id already exists: {spec.id}")
+        self._state.register(spec.id)
+        self._graph.add_task(spec)
+        self._wake()
+
+    def _wake(self) -> None:
+        if self._wakeup is not None and not self._wakeup.done():
+            self._wakeup.set_result(None)
 
     async def run(self) -> RunSummary:
         running: dict[asyncio.Task[None], str] = {}
@@ -55,10 +70,16 @@ class Scheduler:
             if not running:
                 break
 
+            # a mutation resolves the wakeup so new work starts without
+            # waiting for a running task to finish
+            self._wakeup = asyncio.get_running_loop().create_future()
             done, _ = await asyncio.wait(
-                running, return_when=asyncio.FIRST_COMPLETED
+                [*running, self._wakeup], return_when=asyncio.FIRST_COMPLETED
             )
+            self._wakeup = None
             for task in done:
+                if task not in running:
+                    continue
                 task_id = running[task]
                 next_state = (
                     TaskState.FAILED
