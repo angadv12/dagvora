@@ -1,10 +1,13 @@
 import asyncio
 from collections.abc import Mapping
 
+import pytest
+
+from dagvora.exceptions import DuplicateTaskError
 from dagvora.graph import TaskGraph
 from dagvora.models import TaskSpec
 from dagvora.scheduler import Scheduler
-from dagvora.state import TaskState
+from dagvora.state import ExecutionState, TaskState
 
 
 class _RecordingExecutor:
@@ -43,6 +46,16 @@ class _RecordingExecutor:
 def _add_tasks(graph: TaskGraph, *task_ids: str) -> None:
     for task_id in task_ids:
         graph.add_task(TaskSpec(id=task_id, title=task_id))
+
+
+def _topology(
+    graph: TaskGraph,
+) -> tuple[dict[str, TaskSpec], dict[str, set[str]], dict[str, set[str]]]:
+    return (
+        dict(graph.tasks),
+        {task_id: set(ids) for task_id, ids in graph.dependencies.items()},
+        {task_id: set(ids) for task_id, ids in graph.dependents.items()},
+    )
 
 
 def test_scheduler_does_not_start_dependent_before_prerequisite_completes() -> None:
@@ -278,3 +291,89 @@ def test_scheduler_summary_has_sorted_disjoint_groups_and_final_states() -> None
         assert set(summary.failed).isdisjoint(summary.blocked)
 
     asyncio.run(scenario())
+
+
+def test_scheduler_runs_a_task_added_mid_run() -> None:
+    async def scenario() -> None:
+        graph = TaskGraph()
+        _add_tasks(graph, "A")
+        state = ExecutionState(graph.tasks.keys())
+
+        a_started = asyncio.Event()
+        x_started = asyncio.Event()
+        # A cannot finish until X starts, so X must start while A is running
+        executor = _RecordingExecutor(
+            gates={"A": x_started},
+            start_signals={"A": a_started, "X": x_started},
+        )
+        scheduler = Scheduler(graph, executor, state)
+        run_task = asyncio.create_task(scheduler.run())
+
+        await a_started.wait()
+        spec = TaskSpec(id="X", title="X")
+        scheduler.add_task(spec)
+
+        assert graph.tasks["X"] is spec
+        assert graph.dependencies["X"] == set()
+        assert state.state_of("X") is TaskState.PENDING
+        assert state.state_of("A") is TaskState.RUNNING
+
+        summary = await run_task
+
+        assert executor.start_order == ["A", "X"]
+        assert executor.events.index(("start", "X")) < executor.events.index(
+            ("finish", "A")
+        )
+        assert summary.completed == ("A", "X")
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_rejects_a_duplicate_task_mid_run_without_changes() -> None:
+    async def scenario() -> None:
+        graph = TaskGraph()
+        _add_tasks(graph, "A", "B")
+        graph.add_dependency("A", "B")
+        state = ExecutionState(graph.tasks.keys())
+        original = graph.tasks["A"]
+
+        a_started = asyncio.Event()
+        a_done = asyncio.Event()
+        executor = _RecordingExecutor(
+            gates={"A": a_done}, start_signals={"A": a_started}
+        )
+        scheduler = Scheduler(graph, executor, state)
+        run_task = asyncio.create_task(scheduler.run())
+
+        await a_started.wait()
+        topology_before = _topology(graph)
+        states_before = state.snapshot()
+
+        with pytest.raises(DuplicateTaskError):
+            scheduler.add_task(TaskSpec(id="A", title="replacement"))
+        with pytest.raises(DuplicateTaskError):
+            scheduler.add_task(TaskSpec(id="B", title="replacement"))
+
+        assert _topology(graph) == topology_before
+        assert graph.tasks["A"] is original
+        assert state.snapshot() == states_before
+
+        a_done.set()
+        summary = await run_task
+
+        assert executor.start_order == ["A", "B"]
+        assert summary.completed == ("A", "B")
+
+    asyncio.run(scenario())
+
+
+def test_add_task_rejects_an_id_tracked_only_by_state_without_changes() -> None:
+    graph = TaskGraph()
+    state = ExecutionState(("ghost",))
+    scheduler = Scheduler(graph, _RecordingExecutor(), state)
+
+    with pytest.raises(DuplicateTaskError):
+        scheduler.add_task(TaskSpec(id="ghost", title="ghost"))
+
+    assert graph.tasks == {}
+    assert state.snapshot() == {"ghost": TaskState.PENDING}
