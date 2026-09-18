@@ -4,6 +4,7 @@ from .exceptions import (
     DuplicateTaskError,
     InvalidTransitionError,
     MissingTaskError,
+    TaskStartedError,
 )
 from .graph import TaskGraph
 from .models import TaskSpec
@@ -23,5 +24,6 @@ __all__ = [
     "Scheduler",
     "TaskGraph",
     "TaskSpec",
+    "TaskStartedError",
     "TaskState",
 ]

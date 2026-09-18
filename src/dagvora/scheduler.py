@@ -3,7 +3,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
-from .exceptions import DuplicateTaskError
+from .exceptions import DuplicateTaskError, TaskStartedError
 from .graph import TaskGraph
 from .models import TaskSpec
 from .state import ExecutionState, TaskState
@@ -44,6 +44,23 @@ class Scheduler:
         self._state.register(spec.id)
         self._graph.add_task(spec)
         self._wake()
+
+    def add_dependency(self, prerequisite_id: str, dependent_id: str) -> None:
+        # validate against state before the graph mutates; the graph rejects
+        # missing ids and cycles atomically
+        dependent_state = self._state.state_of(dependent_id)
+        prerequisite_state = self._state.state_of(prerequisite_id)
+        if dependent_state not in (TaskState.PENDING, TaskState.READY):
+            raise TaskStartedError(
+                f"dependent already started: {dependent_id} is "
+                f"{dependent_state.value}"
+            )
+        self._graph.add_dependency(prerequisite_id, dependent_id)
+        if (
+            dependent_state is TaskState.READY
+            and prerequisite_state is not TaskState.COMPLETED
+        ):
+            self._state.transition(dependent_id, TaskState.PENDING)
 
     def _wake(self) -> None:
         if self._wakeup is not None and not self._wakeup.done():
