@@ -16,3 +16,7 @@ class CycleError(DagvoraError, ValueError):
 
 class InvalidTransitionError(DagvoraError, ValueError):
     pass
+
+
+class TaskStartedError(DagvoraError, ValueError):
+    pass

@@ -70,7 +70,7 @@ V1 does not retry, checkpoint, cancel, revert, or restart work.
 
 ## Current state
 
-Stage 1 and Stage 2 are complete.
+Stages 1, 2, and 3 are complete.
 
 Stage 1, graph core:
 
@@ -91,29 +91,28 @@ Stage 2, execution core:
 - A worker exception is never re-raised and never fails another task
 - `RunSummary` carries sorted, disjoint `completed`, `failed`, and `blocked` id tuples plus the final `states` map
 
-Forty-two tests pass: fifteen graph and schema, seventeen execution state, ten scheduler. Scheduler tests use `asyncio.Event` for ordering and run through `asyncio.run` from sync test functions; there is no sleep-based sequencing and no async test plugin.
+Stage 3, live graph mutation:
+
+- `Scheduler.add_task` registers a new `TaskSpec` in both `TaskGraph` and `ExecutionState`; it checks the graph before registering state, so a duplicate id changes neither store
+- `Scheduler.add_dependency` rejects a `RUNNING`, `COMPLETED`, or `FAILED` dependent with `TaskStartedError` before touching the graph, then delegates to `TaskGraph.add_dependency` for missing-task and cycle checks
+- A `READY` dependent that gains an unfinished prerequisite returns to `PENDING`; `READY -> PENDING` is the one transition added to `LEGAL_TRANSITIONS`
+- `run()` waits on its running tasks and a wakeup future that `add_task` resolves, so inserted work starts without waiting for a running task to finish
+- Mutations are synchronous calls on the event loop, so the scheduler stays the single writer and never observes a partial mutation
+
+Fifty-eight tests pass: fifteen graph and schema, nineteen execution state, twenty-four scheduler. Scheduler tests use `asyncio.Event` for ordering and run through `asyncio.run` from sync test functions; there is no sleep-based sequencing and no async test plugin.
 
 The Stage 1 inconsistencies are resolved. `models.py` holds the schema, `graph.py` no longer defines a task type, and the README matches the code.
 
-## Next milestone: Stage 3
+## Next milestone: Stage 4
 
-Implement live graph mutation:
-
-1. Insert tasks while the scheduler is running
-2. Insert dependencies while the scheduler is running
-3. Enforce that a runtime dependency may only be added to a `PENDING` or `READY` dependent
-4. Reuse the existing reachability check so a runtime edge cannot close a cycle
-5. Keep the orchestrator the single writer for graph and execution state
-6. Deterministic tests for mid-run insertion, rejected mutation, and unchanged running work
-
-Do not implement the proposal queue in this milestone.
+Add the structured mutation proposal queue. Workers submit proposals for new tasks or dependencies; the orchestrator validates and applies them through `Scheduler.add_task` and `Scheduler.add_dependency`.
 
 ## Roadmap
 
 - Stage 1: graph core, COMPLETE
 - Stage 2: execution core, COMPLETE
-- Stage 3: live graph mutation, NEXT
-- Stage 4: structured mutation proposal queue
+- Stage 3: live graph mutation, COMPLETE
+- Stage 4: structured mutation proposal queue, NEXT
 - Stage 5: LLM planner
 - Stage 6: isolated coding-agent workers
 
