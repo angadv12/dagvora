@@ -625,3 +625,126 @@ def test_add_dependency_keeps_a_ready_dependent_with_a_completed_prerequisite() 
         assert summary.completed == ("A", "B")
 
     asyncio.run(scenario())
+
+
+def test_scheduler_runs_a_task_added_mid_run_with_a_prerequisite() -> None:
+    async def scenario() -> None:
+        graph = TaskGraph()
+        _add_tasks(graph, "A")
+        state = ExecutionState(graph.tasks.keys())
+
+        a_started = asyncio.Event()
+        p_started = asyncio.Event()
+        a_done = asyncio.Event()
+        executor = _RecordingExecutor(
+            gates={"A": a_done},
+            start_signals={"A": a_started, "P": p_started},
+        )
+        scheduler = Scheduler(graph, executor, state)
+        run_task = asyncio.create_task(scheduler.run())
+
+        await a_started.wait()
+        scheduler.add_task(TaskSpec(id="T", title="T"), prerequisites=("A",))
+        scheduler.add_task(TaskSpec(id="P", title="P"))
+
+        assert graph.dependencies["T"] == {"A"}
+        assert "T" in graph.dependents["A"]
+        assert state.state_of("T") is TaskState.PENDING
+
+        # P has no prerequisites, so its start proves the scheduler woke and
+        # rechecked readiness with the edge into T in place
+        await p_started.wait()
+
+        assert state.state_of("A") is TaskState.RUNNING
+        assert state.state_of("T") is TaskState.PENDING
+        assert "T" not in executor.start_order
+
+        a_done.set()
+        summary = await run_task
+
+        assert executor.events.index(("finish", "A")) < executor.events.index(
+            ("start", "T")
+        )
+        assert summary.completed == ("A", "P", "T")
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_holds_a_task_added_mid_run_until_all_prerequisites_finish() -> (
+    None
+):
+    async def scenario() -> None:
+        graph = TaskGraph()
+        _add_tasks(graph, "A", "B")
+        state = ExecutionState(graph.tasks.keys())
+
+        a_started = asyncio.Event()
+        b_started = asyncio.Event()
+        p_started = asyncio.Event()
+        a_done = asyncio.Event()
+        b_done = asyncio.Event()
+        executor = _RecordingExecutor(
+            gates={"A": a_done, "B": b_done},
+            start_signals={"A": a_started, "B": b_started, "P": p_started},
+        )
+        scheduler = Scheduler(graph, executor, state)
+        run_task = asyncio.create_task(scheduler.run())
+
+        await a_started.wait()
+        await b_started.wait()
+        scheduler.add_task(TaskSpec(id="T", title="T"), prerequisites=("A", "B"))
+        scheduler.add_task(TaskSpec(id="P", title="P"), prerequisites=("B",))
+
+        assert graph.dependencies["T"] == {"A", "B"}
+        assert graph.dependencies["P"] == {"B"}
+
+        b_done.set()
+        # P waits only on B, so its start proves B was settled and readiness
+        # was rechecked while A is still running
+        await p_started.wait()
+
+        assert state.state_of("B") is TaskState.COMPLETED
+        assert state.state_of("A") is TaskState.RUNNING
+        assert state.state_of("T") is TaskState.PENDING
+        assert "T" not in executor.start_order
+
+        a_done.set()
+        summary = await run_task
+
+        events = executor.events
+        assert events.index(("finish", "B")) < events.index(("finish", "A"))
+        assert events.index(("finish", "A")) < events.index(("start", "T"))
+        assert summary.completed == ("A", "B", "P", "T")
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("task_id", "prerequisites", "error"),
+    [
+        ("A", ("B",), DuplicateTaskError),
+        ("T", ("missing",), MissingTaskError),
+        ("T", ("A", "missing"), MissingTaskError),
+        ("T", ("T",), CycleError),
+        ("ghost", ("A",), DuplicateTaskError),
+    ],
+)
+def test_add_task_with_prerequisites_rejects_without_changes(
+    task_id: str, prerequisites: tuple[str, ...], error: type[Exception]
+) -> None:
+    graph = TaskGraph()
+    _add_tasks(graph, "A", "B")
+    graph.add_dependency("A", "B")
+    # ghost is tracked by state only, so graph checks alone cannot catch it
+    state = ExecutionState(("A", "B", "ghost"))
+    scheduler = Scheduler(graph, _RecordingExecutor(), state)
+    topology_before = _topology(graph)
+    states_before = state.snapshot()
+
+    with pytest.raises(error):
+        scheduler.add_task(
+            TaskSpec(id=task_id, title=task_id), prerequisites=prerequisites
+        )
+
+    assert _topology(graph) == topology_before
+    assert state.snapshot() == states_before
