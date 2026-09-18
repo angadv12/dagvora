@@ -19,7 +19,8 @@ class TaskState(str, Enum):  # noqa: UP042
 
 LEGAL_TRANSITIONS: Mapping[TaskState, frozenset[TaskState]] = {
     TaskState.PENDING: frozenset({TaskState.READY}),
-    TaskState.READY: frozenset({TaskState.RUNNING}),
+    # a ready task that gains an unfinished prerequisite returns to pending
+    TaskState.READY: frozenset({TaskState.RUNNING, TaskState.PENDING}),
     TaskState.RUNNING: frozenset({TaskState.COMPLETED, TaskState.FAILED}),
     TaskState.COMPLETED: frozenset(),
     TaskState.FAILED: frozenset(),

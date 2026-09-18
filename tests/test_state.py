@@ -19,6 +19,7 @@ def test_registered_id_defaults_to_pending() -> None:
     [
         ((), TaskState.READY),
         ((TaskState.READY,), TaskState.RUNNING),
+        ((TaskState.READY,), TaskState.PENDING),
         ((TaskState.READY, TaskState.RUNNING), TaskState.COMPLETED),
         ((TaskState.READY, TaskState.RUNNING), TaskState.FAILED),
     ],
@@ -47,6 +48,11 @@ def test_every_legal_transition_succeeds(
         (TaskState.PENDING, TaskState.RUNNING, ()),
         (TaskState.PENDING, TaskState.COMPLETED, ()),
         (TaskState.READY, TaskState.COMPLETED, (TaskState.READY,)),
+        (
+            TaskState.RUNNING,
+            TaskState.PENDING,
+            (TaskState.READY, TaskState.RUNNING),
+        ),
         (
             TaskState.FAILED,
             TaskState.PENDING,
