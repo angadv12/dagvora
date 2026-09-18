@@ -1,24 +1,20 @@
 from collections import deque
-from dataclasses import dataclass, field
 
 from .exceptions import CycleError, DuplicateTaskError, MissingTaskError
-
-
-@dataclass
-class Task:
-    id: str
-    dependencies: set[str] = field(default_factory=set)
+from .models import TaskSpec
 
 
 class TaskGraph:
     def __init__(self) -> None:
-        self.tasks: dict[str, Task] = {}
+        self.tasks: dict[str, TaskSpec] = {}
+        self.dependencies: dict[str, set[str]] = {}
         self.dependents: dict[str, set[str]] = {}
 
-    def add_task(self, task: Task) -> None:
+    def add_task(self, task: TaskSpec) -> None:
         if task.id in self.tasks:
             raise DuplicateTaskError(f"task id already exists: {task.id}")
         self.tasks[task.id] = task
+        self.dependencies[task.id] = set()
         self.dependents[task.id] = set()
 
     def add_dependency(self, prerequisite_id: str, dependent_id: str) -> None:
@@ -31,20 +27,19 @@ class TaskGraph:
             raise CycleError(
                 f"self dependency would create a cycle: {prerequisite_id}"
             )
-        if prerequisite_id in self.tasks[dependent_id].dependencies:
+        if prerequisite_id in self.dependencies[dependent_id]:
             return
         if self._is_reachable(dependent_id, prerequisite_id):
             raise CycleError(
                 f"dependency would create a cycle: "
                 f"{prerequisite_id} -> {dependent_id}"
             )
-        self.tasks[dependent_id].dependencies.add(prerequisite_id)
+        self.dependencies[dependent_id].add(prerequisite_id)
         self.dependents[prerequisite_id].add(dependent_id)
 
     def topological_sort(self) -> list[str]:
         indegrees = {
-            task_id: len(task.dependencies)
-            for task_id, task in self.tasks.items()
+            task_id: len(self.dependencies[task_id]) for task_id in self.tasks
         }
         ready = deque(
             task_id for task_id, indegree in indegrees.items() if indegree == 0

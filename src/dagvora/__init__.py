@@ -2,15 +2,26 @@ from .exceptions import (
     CycleError,
     DagvoraError,
     DuplicateTaskError,
+    InvalidTransitionError,
     MissingTaskError,
 )
-from .graph import Task, TaskGraph
+from .graph import TaskGraph
+from .models import TaskSpec
+from .scheduler import Executor, RunSummary, Scheduler
+from .state import LEGAL_TRANSITIONS, ExecutionState, TaskState
 
 __all__ = [
-    "Task",
-    "TaskGraph",
+    "LEGAL_TRANSITIONS",
+    "CycleError",
     "DagvoraError",
     "DuplicateTaskError",
+    "ExecutionState",
+    "Executor",
+    "InvalidTransitionError",
     "MissingTaskError",
-    "CycleError",
+    "RunSummary",
+    "Scheduler",
+    "TaskGraph",
+    "TaskSpec",
+    "TaskState",
 ]

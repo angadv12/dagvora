@@ -1,69 +1,120 @@
 # Dagvora project context
 
-## Problem
+## Purpose
 
-Most agent planners create a fixed task graph before execution. Real workers
-discover missing prerequisites after work begins. Dagvora is a small agent
-runtime whose orchestrator can accept those discoveries and safely mutate the
-task DAG without creating cycles, invalidating active work, or allowing
-concurrent workers to corrupt shared state.
+Dagvora is an agent runtime built around a task DAG that can change while work is running.
 
-Example: an OAuth worker discovers that the session model needs a migration.
-The orchestrator can add `session_migration` after `db_schema` and make OAuth
-and API work depend on it, provided those downstream tasks have not started.
+Workers may discover missing prerequisites and propose new tasks or dependencies. Only the orchestrator may validate and apply those changes.
 
-Workers may propose tasks and dependencies, but only the orchestrator owns and
-mutates graph state.
+The central V1 goal is safe runtime DAG mutation without cycles, changes to already-started work, or concurrent workers corrupting shared state.
+
+## Core design
+
+Dagvora separates three concepts:
+
+```text
+TaskSpec = what a task is
+TaskGraph = how tasks depend on each other
+ExecutionState = what is happening to each task
+```
+
+Workers execute tasks and submit results or mutation proposals. They never directly change the graph or execution state.
+
+The orchestrator is the single writer for mutable runtime state.
 
 ## V1 behavior
 
-1. A task is `PENDING`, `READY`, `RUNNING`, `COMPLETED`, or `FAILED`.
-2. A task is ready when every prerequisite is complete.
-3. Ready tasks run concurrently through an async scheduler.
-4. New tasks may be inserted while the scheduler is running.
-5. A dependency may be added only when its dependent is pending or ready.
-6. Before adding `u -> v`, the graph searches for an existing path `v -> u`.
-   If one exists, the mutation is rejected because it would create a cycle.
+Task states:
 
-V1 deliberately does not cancel, checkpoint, revert, or restart running tasks.
-It also has no persistence, distributed workers, graph versioning, retry policy,
-or LLM integration.
+```text
+PENDING
+READY
+RUNNING
+COMPLETED
+FAILED
+```
 
-## Delivery stages
+A task is ready when it is `PENDING` and every dependency is `COMPLETED`.
 
-- Stage 1: static task graph with task storage, safe dependency insertion, Kahn
-  topological sorting, cycle rejection, and tests.
-- Stage 2: execution core with task readiness, state transitions, and async
-  scheduling.
-- Stage 3: runtime mutation to insert tasks and dependencies while the scheduler
-  runs, under the V1 policy.
-- Stage 4: mutation protocol where workers submit structured proposals to a queue;
-  the orchestrator serializes and applies them.
-- Stage 5: LLM planner to convert a request such as “Add JWT authentication” into
-  structured tasks and dependencies.
-- Stage 6: workers that replace fake callables with isolated coding agents.
+Ready tasks run concurrently through an async scheduler.
 
-## Current state as of 2026-08-27
+For an edge `A -> B`, `A` is the prerequisite and `B` depends on `A`:
 
-The validated task schema is implemented. The current task is the in-memory
-`TaskGraph` with `add_task`, `add_dependency`, and `topological_sort`, plus its
-tests. Readiness, scheduling, runtime mutation during execution, and worker
-integration remain planned but unbuilt.
+```python
+graph.add_dependency("A", "B")
+```
 
-For graph edges, `add_dependency("A", "B")` means `A -> B`: task `B` depends
-on task `A`. Incoming dependencies and outgoing dependents must remain
-synchronized, and rejected mutations must leave the graph unchanged.
+Before adding `A -> B`, search for an existing path from `B` to `A`. If one exists, reject the edge because it would create a cycle.
+
+Runtime dependencies may only be added to `PENDING` or `READY` tasks. Workers submit mutation proposals through a queue, and the orchestrator validates and applies them.
+
+If one task fails:
+
+- Mark it `FAILED`
+- Continue independent branches
+- Leave its dependents `PENDING`
+- Report remaining pending tasks as blocked in the final run summary
+
+V1 does not retry, checkpoint, cancel, revert, or restart work.
 
 ## Technical choices
 
-- Python 3.11+; use `asyncio` when orchestration begins.
-- Pydantic models for validation now and JSON Schema generation for later LLM
-  structured output.
-- In-memory graph storage for the first three stages.
-- Kahn’s algorithm for full-graph validation and topological sorting:
-  `O(V + E)` time.
-- DFS or BFS reachability for mutation-time cycle checks: before adding
-  `u -> v`, search outward from `v` for `u`. `O(V + E)` worst-case time is
-  acceptable for the initial scale.
-- Three-state DFS for reporting an explicit cycle path is deferred until that
-  diagnostic is needed.
+- Python 3.11+
+- Pydantic for externally produced structured data such as `TaskSpec`
+- Plain Python for internal runtime bookkeeping
+- In-memory state for V1
+- Kahn's algorithm for topological sorting
+- DFS or BFS reachability for mutation-time cycle checks
+- `asyncio.wait(..., return_when=asyncio.FIRST_COMPLETED)` for scheduling
+- Single-writer orchestrator to avoid concurrent graph mutation
+
+## Current state
+
+Stage 1 and Stage 2 are complete.
+
+Stage 1, graph core:
+
+- Task and dependency storage
+- Bidirectional edge tracking
+- Duplicate and missing-task validation
+- Cycle-safe dependency insertion
+- Atomic rejection of invalid edges
+- Kahn topological sorting
+
+Stage 2, execution core:
+
+- `TaskSpec` in `src/dagvora/models.py` is a frozen Pydantic model with `id`, `title`, and optional `description`
+- `TaskGraph` in `src/dagvora/graph.py` stores `TaskSpec` values and owns topology in `graph.dependencies` and `graph.dependents`; the `Task` dataclass is gone
+- `ExecutionState` in `src/dagvora/state.py` is plain Python and owns only the id to `TaskState` map, `LEGAL_TRANSITIONS`, and an atomic `transition`
+- An illegal transition raises `InvalidTransitionError` and leaves the state unchanged
+- `Executor` and `Scheduler` in `src/dagvora/scheduler.py` run ready work concurrently, track in-flight `asyncio.Task` objects explicitly, and settle each completion as `COMPLETED` or `FAILED`
+- A worker exception is never re-raised and never fails another task
+- `RunSummary` carries sorted, disjoint `completed`, `failed`, and `blocked` id tuples plus the final `states` map
+
+Forty-two tests pass: fifteen graph and schema, seventeen execution state, ten scheduler. Scheduler tests use `asyncio.Event` for ordering and run through `asyncio.run` from sync test functions; there is no sleep-based sequencing and no async test plugin.
+
+The Stage 1 inconsistencies are resolved. `models.py` holds the schema, `graph.py` no longer defines a task type, and the README matches the code.
+
+## Next milestone: Stage 3
+
+Implement live graph mutation:
+
+1. Insert tasks while the scheduler is running
+2. Insert dependencies while the scheduler is running
+3. Enforce that a runtime dependency may only be added to a `PENDING` or `READY` dependent
+4. Reuse the existing reachability check so a runtime edge cannot close a cycle
+5. Keep the orchestrator the single writer for graph and execution state
+6. Deterministic tests for mid-run insertion, rejected mutation, and unchanged running work
+
+Do not implement the proposal queue in this milestone.
+
+## Roadmap
+
+- Stage 1: graph core, COMPLETE
+- Stage 2: execution core, COMPLETE
+- Stage 3: live graph mutation, NEXT
+- Stage 4: structured mutation proposal queue
+- Stage 5: LLM planner
+- Stage 6: isolated coding-agent workers
+
+Later versions may add persistence, retries, checkpointing, cancellation, reversion, graph versioning, and distributed workers.

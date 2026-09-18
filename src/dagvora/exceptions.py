@@ -12,3 +12,7 @@ class MissingTaskError(DagvoraError, ValueError):
 
 class CycleError(DagvoraError, ValueError):
     pass
+
+
+class InvalidTransitionError(DagvoraError, ValueError):
+    pass
