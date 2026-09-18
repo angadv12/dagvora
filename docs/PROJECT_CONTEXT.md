@@ -46,7 +46,7 @@ graph.add_dependency("A", "B")
 
 Before adding `A -> B`, search for an existing path from `B` to `A`. If one exists, reject the edge because it would create a cycle.
 
-Runtime dependencies may only be added to `PENDING` or `READY` tasks. Workers submit mutation proposals through a queue, and the orchestrator validates and applies them.
+Runtime dependencies may only be added to `PENDING` or `READY` tasks. In Stage 4, workers will submit mutation proposals through a queue, and the orchestrator will validate and apply them.
 
 If one task fails:
 
