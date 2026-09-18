@@ -145,6 +145,9 @@ class DiscoveringExecutor:
   anything it awaits or spawns, never to sibling workers or the caller of
   `run()`. Calling `current_proposals()` anywhere else raises
   `ProposalContextError`.
+- The scheduler closes a worker's handle when the worker settles. A task the
+  worker left running that proposes after that gets `ProposalContextError`, so
+  no proposal can be queued after `run()` returns.
 - `propose_task(task, prerequisites=())` builds an `AddTaskProposal` and
   `propose_dependency(prerequisite_id, dependent_id)` builds an
   `AddDependencyProposal`. Both are frozen Pydantic models, joined as

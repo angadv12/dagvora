@@ -55,14 +55,26 @@ class ProposalHandle:
     def __init__(self, task_id: str, queue: ProposalQueue) -> None:
         self._task_id = task_id
         self._queue = queue
+        self._closed = False
 
     @property
     def task_id(self) -> str:
         return self._task_id
 
+    def close(self) -> None:
+        # the scheduler closes the handle when its worker settles
+        self._closed = True
+
+    def _check_open(self) -> None:
+        if self._closed:
+            raise ProposalContextError(
+                f"proposal handle closed: task {self._task_id} has settled"
+            )
+
     def propose_task(
         self, task: TaskSpec, prerequisites: Iterable[str] = ()
     ) -> AddTaskProposal:
+        self._check_open()
         # pydantic coerces the iterable to a tuple and rejects a bare string
         proposal = AddTaskProposal(
             proposed_by=self._task_id, task=task, prerequisites=prerequisites
@@ -73,6 +85,7 @@ class ProposalHandle:
     def propose_dependency(
         self, prerequisite_id: str, dependent_id: str
     ) -> AddDependencyProposal:
+        self._check_open()
         proposal = AddDependencyProposal(
             proposed_by=self._task_id,
             prerequisite_id=prerequisite_id,
