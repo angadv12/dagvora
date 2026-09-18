@@ -20,3 +20,7 @@ class InvalidTransitionError(DagvoraError, ValueError):
 
 class TaskStartedError(DagvoraError, ValueError):
     pass
+
+
+class ProposalContextError(DagvoraError, RuntimeError):
+    pass
