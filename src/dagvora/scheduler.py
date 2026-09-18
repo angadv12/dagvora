@@ -1,9 +1,14 @@
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
-from .exceptions import DuplicateTaskError, TaskStartedError
+from .exceptions import (
+    CycleError,
+    DuplicateTaskError,
+    MissingTaskError,
+    TaskStartedError,
+)
 from .graph import TaskGraph
 from .models import TaskSpec
 from .state import ExecutionState, TaskState
@@ -37,12 +42,27 @@ class Scheduler:
         # set only while run is parked waiting for work to finish
         self._wakeup: asyncio.Future[None] | None = None
 
-    def add_task(self, spec: TaskSpec) -> None:
-        # check the graph first so a rejected id leaves both stores unchanged
+    def add_task(
+        self, spec: TaskSpec, *, prerequisites: Iterable[str] = ()
+    ) -> None:
+        prerequisite_ids = tuple(prerequisites)
+        # validate every id before any write so a rejection leaves both stores
+        # unchanged; no await here, so the task is never seen without its edges
         if spec.id in self._graph.tasks:
             raise DuplicateTaskError(f"task id already exists: {spec.id}")
+        for prerequisite_id in prerequisite_ids:
+            if prerequisite_id == spec.id:
+                raise CycleError(
+                    f"self dependency would create a cycle: {prerequisite_id}"
+                )
+            if prerequisite_id not in self._graph.tasks:
+                raise MissingTaskError(f"missing task: {prerequisite_id}")
+            self._state.state_of(prerequisite_id)
         self._state.register(spec.id)
         self._graph.add_task(spec)
+        # cannot fail: the new task has no dependents and stays pending
+        for prerequisite_id in prerequisite_ids:
+            self._graph.add_dependency(prerequisite_id, spec.id)
         self._wake()
 
     def add_dependency(self, prerequisite_id: str, dependent_id: str) -> None:
