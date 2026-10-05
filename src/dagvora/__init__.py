@@ -4,15 +4,25 @@ from .exceptions import (
     DuplicateTaskError,
     InvalidTransitionError,
     MissingTaskError,
+    ProposalContextError,
     TaskStartedError,
 )
 from .graph import TaskGraph
 from .models import TaskSpec
-from .scheduler import Executor, RunSummary, Scheduler
+from .proposals import (
+    AddDependencyProposal,
+    AddTaskProposal,
+    MutationProposal,
+    ProposalHandle,
+    current_proposals,
+)
+from .scheduler import Executor, ProposalOutcome, RunSummary, Scheduler
 from .state import LEGAL_TRANSITIONS, ExecutionState, TaskState
 
 __all__ = [
     "LEGAL_TRANSITIONS",
+    "AddDependencyProposal",
+    "AddTaskProposal",
     "CycleError",
     "DagvoraError",
     "DuplicateTaskError",
@@ -20,10 +30,15 @@ __all__ = [
     "Executor",
     "InvalidTransitionError",
     "MissingTaskError",
+    "MutationProposal",
+    "ProposalContextError",
+    "ProposalHandle",
+    "ProposalOutcome",
     "RunSummary",
     "Scheduler",
     "TaskGraph",
     "TaskSpec",
     "TaskStartedError",
     "TaskState",
+    "current_proposals",
 ]
