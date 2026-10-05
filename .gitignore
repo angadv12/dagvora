@@ -9,3 +9,8 @@ __pycache__/
 
 AGENTS.md
 CLAUDE.md
+
+# local learning walkthroughs
+docs/stage2-walkthrough.html
+docs/stage3-walkthrough.html
+docs/stage4-walkthrough.html
