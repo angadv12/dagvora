@@ -1,3 +1,4 @@
+import threading
 from collections import deque
 from collections.abc import Callable, Iterable
 from contextvars import ContextVar
@@ -56,6 +57,9 @@ class ProposalHandle:
         self._task_id = task_id
         self._queue = queue
         self._closed = False
+        # the queue and the scheduler wakeup are not thread safe, so only the
+        # thread that created the handle may submit through it
+        self._owner_thread = threading.get_ident()
 
     @property
     def task_id(self) -> str:
@@ -66,6 +70,13 @@ class ProposalHandle:
         self._closed = True
 
     def _check_open(self) -> None:
+        # asyncio.to_thread copies the context, so a worker's thread inherits
+        # the binding; reject it rather than wake the loop unsafely
+        if threading.get_ident() != self._owner_thread:
+            raise ProposalContextError(
+                f"proposal handle for task {self._task_id} used off its "
+                "event loop thread: propose from the worker's own task"
+            )
         if self._closed:
             raise ProposalContextError(
                 f"proposal handle closed: task {self._task_id} has settled"

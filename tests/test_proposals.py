@@ -1,4 +1,5 @@
 import asyncio
+import threading
 
 import pytest
 from pydantic import ValidationError
@@ -280,3 +281,31 @@ def test_bound_handle_is_visible_only_to_its_own_task() -> None:
 
     with pytest.raises(ProposalContextError):
         current_proposals()
+
+
+def test_handle_rejects_submits_from_another_thread() -> None:
+    submits: list[None] = []
+    queue = ProposalQueue(on_submit=lambda: submits.append(None))
+    handle = ProposalHandle("A", queue)
+    errors: list[BaseException] = []
+
+    def propose() -> None:
+        for submit in (
+            lambda: handle.propose_task(_spec("B")),
+            lambda: handle.propose_dependency("B", "C"),
+        ):
+            try:
+                submit()
+            except ProposalContextError as error:
+                errors.append(error)
+
+    thread = threading.Thread(target=propose)
+    thread.start()
+    thread.join()
+
+    assert len(errors) == 2
+    assert len(queue) == 0
+    assert submits == []
+    # the owning thread can still submit
+    handle.propose_task(_spec("B"))
+    assert len(queue) == 1

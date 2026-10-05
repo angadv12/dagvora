@@ -494,3 +494,30 @@ def test_a_failed_workers_proposal_is_still_applied() -> None:
         assert summary.proposals[0].applied is True
 
     asyncio.run(scenario())
+
+
+def test_a_proposal_from_a_worker_thread_is_rejected_and_queues_nothing() -> None:
+    async def scenario() -> None:
+        graph = TaskGraph()
+        _add_tasks(graph, "A")
+        executor = _ScriptedExecutor()
+        seen: dict[str, object] = {}
+
+        def propose_from_thread() -> None:
+            # to_thread copies the context, so the thread sees A's handle
+            current_proposals().propose_task(_spec("X"))
+
+        async def worker_a() -> None:
+            with pytest.raises(ProposalContextError) as error:
+                await asyncio.to_thread(propose_from_thread)
+            seen["error"] = error.value
+
+        executor.scripts["A"] = worker_a
+        summary = await Scheduler(graph, executor).run()
+
+        assert "off its event loop thread" in str(seen["error"])
+        assert "X" not in graph.tasks
+        assert summary.completed == ("A",)
+        assert summary.proposals == ()
+
+    asyncio.run(scenario())
